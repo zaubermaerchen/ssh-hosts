@@ -3,6 +3,7 @@ package sshconfig
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -28,6 +29,23 @@ type Loader struct {
 	ctx expansionContext
 }
 
+// Host is a concrete SSH alias and its resolved connection destination.
+type Host struct {
+	Alias    string
+	User     string
+	HostName string
+	Port     string
+}
+
+// Destination formats the resolved destination for display.
+func (h Host) Destination() string {
+	hostname := h.HostName
+	if strings.HasPrefix(hostname, "[") && strings.HasSuffix(hostname, "]") {
+		hostname = strings.TrimSuffix(strings.TrimPrefix(hostname, "["), "]")
+	}
+	return h.User + "@" + net.JoinHostPort(hostname, h.Port)
+}
+
 // NewLoader creates a Loader configured for the current user and machine.
 func NewLoader() (*Loader, error) {
 	ctx, err := systemExpansionContext()
@@ -42,8 +60,9 @@ func (l *Loader) DefaultConfigPath() string {
 	return filepath.Join(l.ctx.homeDir, ".ssh", "config")
 }
 
-// ListHosts returns concrete Host entries in first-seen order.
-func (l *Loader) ListHosts(configPath string) ([]string, error) {
+// ListHosts returns concrete Host entries and their resolved destinations in
+// first-seen order.
+func (l *Loader) ListHosts(configPath string) ([]Host, error) {
 	return newHostLoader(l.ctx).load(configPath)
 }
 
@@ -74,10 +93,29 @@ func systemExpansionContext() (expansionContext, error) {
 }
 
 type hostLoader struct {
-	ctx    expansionContext
-	hosts  []string
-	seen   map[string]struct{}
-	active map[string]struct{}
+	ctx     expansionContext
+	aliases []string
+	options []optionDirective
+	seen    map[string]struct{}
+	active  map[string]struct{}
+}
+
+type hostCondition struct {
+	clauses [][]string
+	none    bool
+}
+
+type parseState struct {
+	guard     hostCondition
+	condition hostCondition
+}
+
+type optionDirective struct {
+	condition hostCondition
+	keyword   string
+	value     string
+	source    string
+	line      int
 }
 
 func newHostLoader(ctx expansionContext) *hostLoader {
@@ -88,14 +126,15 @@ func newHostLoader(ctx expansionContext) *hostLoader {
 	}
 }
 
-func (l *hostLoader) load(configPath string) ([]string, error) {
-	if err := l.loadFile(configPath, 0); err != nil {
+func (l *hostLoader) load(configPath string) ([]Host, error) {
+	state := &parseState{}
+	if err := l.loadFile(configPath, 0, state); err != nil {
 		return nil, err
 	}
-	return l.hosts, nil
+	return l.resolveHosts()
 }
 
-func (l *hostLoader) loadFile(path string, depth int) error {
+func (l *hostLoader) loadFile(path string, depth int, state *parseState) error {
 	if depth > maxIncludeDepth {
 		return fmt.Errorf("include depth exceeds %d while reading %q", maxIncludeDepth, path)
 	}
@@ -136,11 +175,34 @@ func (l *hostLoader) loadFile(path string, depth int) error {
 				return fmt.Errorf("%s:%d: Host requires at least one argument", canonicalPath, lineNumber)
 			}
 			l.addHosts(arguments)
+			state.condition = combineConditions(state.guard, hostCondition{clauses: [][]string{arguments}})
+		case "match":
+			if len(arguments) == 0 {
+				return fmt.Errorf("%s:%d: Match requires at least one argument", canonicalPath, lineNumber)
+			}
+			if len(arguments) == 1 && strings.EqualFold(arguments[0], "all") {
+				state.condition = state.guard
+			} else {
+				// Match may depend on runtime state or execute commands. Do not
+				// apply its options while producing a static host listing.
+				state.condition = hostCondition{none: true}
+			}
+		case "hostname", "user", "port":
+			if len(arguments) != 1 {
+				return fmt.Errorf("%s:%d: %s requires exactly one argument", canonicalPath, lineNumber, keyword)
+			}
+			l.options = append(l.options, optionDirective{
+				condition: state.condition,
+				keyword:   strings.ToLower(keyword),
+				value:     arguments[0],
+				source:    canonicalPath,
+				line:      lineNumber,
+			})
 		case "include":
 			if len(arguments) == 0 {
 				return fmt.Errorf("%s:%d: Include requires at least one path", canonicalPath, lineNumber)
 			}
-			if err := l.loadIncludes(arguments, depth, canonicalPath, lineNumber); err != nil {
+			if err := l.loadIncludes(arguments, depth, canonicalPath, lineNumber, state); err != nil {
 				return err
 			}
 		}
@@ -160,11 +222,11 @@ func (l *hostLoader) addHosts(arguments []string) {
 			continue
 		}
 		l.seen[host] = struct{}{}
-		l.hosts = append(l.hosts, host)
+		l.aliases = append(l.aliases, host)
 	}
 }
 
-func (l *hostLoader) loadIncludes(patterns []string, depth int, source string, line int) error {
+func (l *hostLoader) loadIncludes(patterns []string, depth int, source string, line int, state *parseState) error {
 	for _, rawPattern := range patterns {
 		pattern, err := l.expandIncludePath(rawPattern)
 		if err != nil {
@@ -187,12 +249,183 @@ func (l *hostLoader) loadIncludes(patterns []string, depth int, source string, l
 			matches = []string{pattern}
 		}
 		for _, match := range matches {
-			if err := l.loadFile(match, depth+1); err != nil {
+			includedState := &parseState{guard: state.condition, condition: state.condition}
+			if err := l.loadFile(match, depth+1, includedState); err != nil {
 				return fmt.Errorf("%s:%d: Include %q: %w", source, line, rawPattern, err)
 			}
 		}
 	}
 	return nil
+}
+
+func (l *hostLoader) resolveHosts() ([]Host, error) {
+	hosts := make([]Host, 0, len(l.aliases))
+	for _, alias := range l.aliases {
+		host := Host{Alias: alias}
+		var hostNameSource, userSource, portSource *optionDirective
+		for index := range l.options {
+			option := &l.options[index]
+			matches, err := option.condition.matches(alias)
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: invalid Host pattern: %w", option.source, option.line, err)
+			}
+			if !matches {
+				continue
+			}
+			switch option.keyword {
+			case "hostname":
+				if host.HostName == "" {
+					host.HostName = option.value
+					hostNameSource = option
+				}
+			case "user":
+				if host.User == "" {
+					host.User = option.value
+					userSource = option
+				}
+			case "port":
+				if host.Port == "" {
+					host.Port = option.value
+					portSource = option
+				}
+			}
+		}
+		if host.User == "" {
+			host.User = l.ctx.username
+		}
+		if host.HostName == "" {
+			host.HostName = alias
+		} else {
+			expanded, err := expandHostName(host.HostName, alias)
+			if err != nil {
+				return nil, optionError(hostNameSource, "resolve HostName for %q: %v", alias, err)
+			}
+			host.HostName = expanded
+		}
+		if host.Port == "" {
+			host.Port = "22"
+		}
+		port, err := strconv.Atoi(host.Port)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, optionError(portSource, "resolve Port for %q: invalid port %q", alias, host.Port)
+		}
+		expandedUser, err := l.expandUser(host.User, host)
+		if err != nil {
+			return nil, optionError(userSource, "resolve User for %q: %v", alias, err)
+		}
+		host.User = expandedUser
+		hosts = append(hosts, host)
+	}
+	return hosts, nil
+}
+
+func optionError(source *optionDirective, format string, arguments ...any) error {
+	message := fmt.Sprintf(format, arguments...)
+	if source == nil {
+		return fmt.Errorf("%s", message)
+	}
+	return fmt.Errorf("%s:%d: %s", source.source, source.line, message)
+}
+
+func (l *hostLoader) expandUser(value string, host Host) (string, error) {
+	expanded, err := expandEnvironment(value)
+	if err != nil {
+		return "", err
+	}
+	replacements := map[byte]string{
+		'%': "%",
+		'd': l.ctx.homeDir,
+		'h': host.HostName,
+		'i': l.ctx.uid,
+		'k': host.Alias,
+		'L': l.ctx.localShort,
+		'l': l.ctx.localHostname,
+		'n': host.Alias,
+		'p': host.Port,
+		'u': l.ctx.username,
+	}
+	var result strings.Builder
+	for index := 0; index < len(expanded); index++ {
+		if expanded[index] != '%' {
+			result.WriteByte(expanded[index])
+			continue
+		}
+		if index+1 == len(expanded) {
+			return "", fmt.Errorf("incomplete %% token")
+		}
+		index++
+		if replacement, ok := replacements[expanded[index]]; ok {
+			result.WriteString(replacement)
+			continue
+		}
+		return "", fmt.Errorf("unsupported token %%%c", expanded[index])
+	}
+	if result.Len() == 0 {
+		return "", fmt.Errorf("User expands to an empty value")
+	}
+	return result.String(), nil
+}
+
+func (c hostCondition) matches(alias string) (bool, error) {
+	if c.none {
+		return false, nil
+	}
+	for _, clause := range c.clauses {
+		matchedPositive := false
+		for _, argument := range clause {
+			for _, rawPattern := range strings.Split(argument, ",") {
+				negated := strings.HasPrefix(rawPattern, "!")
+				pattern := strings.TrimPrefix(rawPattern, "!")
+				matched, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(alias))
+				if err != nil {
+					return false, err
+				}
+				if matched && negated {
+					return false, nil
+				}
+				if matched {
+					matchedPositive = true
+				}
+			}
+		}
+		if !matchedPositive {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func combineConditions(left, right hostCondition) hostCondition {
+	if left.none || right.none {
+		return hostCondition{none: true}
+	}
+	clauses := make([][]string, 0, len(left.clauses)+len(right.clauses))
+	clauses = append(clauses, left.clauses...)
+	clauses = append(clauses, right.clauses...)
+	return hostCondition{clauses: clauses}
+}
+
+func expandHostName(value, alias string) (string, error) {
+	var result strings.Builder
+	for index := 0; index < len(value); index++ {
+		if value[index] != '%' {
+			result.WriteByte(value[index])
+			continue
+		}
+		if index+1 == len(value) {
+			return "", fmt.Errorf("incomplete %% token")
+		}
+		index++
+		switch value[index] {
+		case '%':
+			result.WriteByte('%')
+		case 'h':
+			result.WriteString(alias)
+		default:
+			return "", fmt.Errorf("unsupported token %%%c", value[index])
+		}
+	}
+	return result.String(), nil
 }
 
 func (l *hostLoader) expandIncludePath(path string) (string, error) {

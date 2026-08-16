@@ -22,7 +22,7 @@ func TestSelectWithFZFWithoutHosts(t *testing.T) {
 func TestSelectWithFZFMissingExecutable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code, err := Select([]string{"alpha"}, "fzf", &stdout, &stderr)
+	code, err := Select([]Item{{Value: "alpha", Display: "alpha\talice@example.com:22"}}, "fzf", &stdout, &stderr)
 	if err == nil || code != 1 {
 		t.Fatalf("selectWithFZF() code = %d, error = %v", code, err)
 	}
@@ -45,8 +45,8 @@ func TestNormalizeFinder(t *testing.T) {
 
 func TestFinderArguments(t *testing.T) {
 	wantArguments := map[string][]string{
-		"fzf":  {"--prompt=SSH host> "},
-		"sk":   {"--prompt=SSH host> "},
+		"fzf":  {"--prompt=SSH host> ", "--no-multi"},
+		"sk":   {"--prompt=SSH host> ", "--no-multi"},
 		"peco": {"--prompt=SSH host> ", "--initial-filter=Fuzzy", "--on-cancel=error"},
 	}
 	for _, finder := range supportedFinders {
@@ -54,6 +54,20 @@ func TestFinderArguments(t *testing.T) {
 		if strings.Join(finder.arguments, "\x00") != strings.Join(want, "\x00") {
 			t.Errorf("%s arguments = %#v, want %#v", finder.name, finder.arguments, want)
 		}
+	}
+}
+
+func TestSelectedValue(t *testing.T) {
+	items := []Item{
+		{Value: "production", Display: "production\tdeploy@prod.example.com:22"},
+		{Value: "staging", Display: "staging\tubuntu@10.0.0.12:2222"},
+	}
+	got, err := selectedValue("staging\tubuntu@10.0.0.12:2222\n", items)
+	if err != nil || got != "staging" {
+		t.Fatalf("selectedValue() = %q, %v; want staging, nil", got, err)
+	}
+	if _, err := selectedValue("unknown\n", items); err == nil {
+		t.Fatal("selectedValue() error = nil, want unknown selection error")
 	}
 }
 

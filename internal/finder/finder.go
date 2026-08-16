@@ -1,6 +1,7 @@
 package finder
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +15,16 @@ type finderSpec struct {
 	arguments  []string
 }
 
+// Item separates the text shown in the finder from the value returned after
+// selection.
+type Item struct {
+	Value   string
+	Display string
+}
+
 var supportedFinders = []finderSpec{
-	{name: "fzf", executable: "fzf", arguments: []string{"--prompt=SSH host> "}},
-	{name: "sk", executable: "sk", arguments: []string{"--prompt=SSH host> "}},
+	{name: "fzf", executable: "fzf", arguments: []string{"--prompt=SSH host> ", "--no-multi"}},
+	{name: "sk", executable: "sk", arguments: []string{"--prompt=SSH host> ", "--no-multi"}},
 	{
 		name:       "peco",
 		executable: "peco",
@@ -63,9 +71,10 @@ func resolveFinderWith(name string, lookPath func(string) (string, error)) (find
 	return finderSpec{}, fmt.Errorf("unsupported fuzzy finder %q", name)
 }
 
-// Select runs a fuzzy finder with hosts as input and writes its selection.
-func Select(hosts []string, finderName string, stdout, stderr io.Writer) (int, error) {
-	if len(hosts) == 0 {
+// Select runs a fuzzy finder with items as input and writes the selected
+// item's value.
+func Select(items []Item, finderName string, stdout, stderr io.Writer) (int, error) {
+	if len(items) == 0 {
 		return 1, nil
 	}
 	finder, err := resolveFinder(finderName)
@@ -73,9 +82,15 @@ func Select(hosts []string, finderName string, stdout, stderr io.Writer) (int, e
 		return 1, err
 	}
 
+	displays := make([]string, 0, len(items))
+	for _, item := range items {
+		displays = append(displays, item.Display)
+	}
+
+	var selection bytes.Buffer
 	command := exec.Command(finder.executable, finder.arguments...)
-	command.Stdin = strings.NewReader(strings.Join(hosts, "\n") + "\n")
-	command.Stdout = stdout
+	command.Stdin = strings.NewReader(strings.Join(displays, "\n") + "\n")
+	command.Stdout = &selection
 	command.Stderr = stderr
 
 	if err := command.Run(); err != nil {
@@ -88,5 +103,23 @@ func Select(hosts []string, finderName string, stdout, stderr io.Writer) (int, e
 		}
 		return 1, fmt.Errorf("run %s: %w", finder.executable, err)
 	}
+	value, err := selectedValue(selection.String(), items)
+	if err != nil {
+		return 1, err
+	}
+	fmt.Fprintln(stdout, value)
 	return 0, nil
+}
+
+func selectedValue(output string, items []Item) (string, error) {
+	selected := strings.Split(strings.TrimRight(output, "\r\n"), "\n")[0]
+	if selected == "" {
+		return "", fmt.Errorf("fuzzy finder returned no selection")
+	}
+	for _, item := range items {
+		if selected == item.Display {
+			return item.Value, nil
+		}
+	}
+	return "", fmt.Errorf("fuzzy finder returned an unknown selection %q", selected)
 }

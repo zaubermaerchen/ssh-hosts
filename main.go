@@ -19,7 +19,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runWithSelector(args, stdout, stderr, finder.Select)
 }
 
-type hostSelector func(hosts []string, finder string, stdout, stderr io.Writer) (int, error)
+type hostSelector func(items []finder.Item, finder string, stdout, stderr io.Writer) (int, error)
 
 func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelector) int {
 	flags := flag.NewFlagSet("ssh-hosts", flag.ContinueOnError)
@@ -28,7 +28,7 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	finderFlag := flags.String("finder", "", "fuzzy finder: auto, fzf, sk/skim, or peco (implies --fzf)")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: ssh-hosts [--fzf | --finder=NAME] [config-file]")
-		fmt.Fprintln(stderr, "List concrete Host names from an OpenSSH client configuration.")
+		fmt.Fprintln(stderr, "List SSH aliases and their resolved connection destinations.")
 		flags.PrintDefaults()
 	}
 
@@ -69,16 +69,23 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 		return 1
 	}
+	items := make([]finder.Item, 0, len(hosts))
+	for _, host := range hosts {
+		items = append(items, finder.Item{
+			Value:   host.Alias,
+			Display: host.Alias + "\t" + host.Destination(),
+		})
+	}
 	if finderName != "" {
-		code, err := selector(hosts, finderName, stdout, stderr)
+		code, err := selector(items, finderName, stdout, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 			return 1
 		}
 		return code
 	}
-	for _, host := range hosts {
-		fmt.Fprintln(stdout, host)
+	for _, item := range items {
+		fmt.Fprintln(stdout, item.Display)
 	}
 	return 0
 }

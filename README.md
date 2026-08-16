@@ -1,6 +1,6 @@
 # ssh-hosts
 
-OpenSSHのクライアント設定から、具体的なホスト名だけを一覧表示する小さなCLIです。
+OpenSSHのクライアント設定から、具体的なホストと接続先を一覧表示する小さなCLIです。
 `Include` で分割された設定も再帰的に読み込みます。
 
 ## インストール
@@ -25,9 +25,9 @@ go build .
 
 ```console
 $ ssh-hosts
-production
-staging
-development
+production	deploy@prod.example.com:22
+staging	ubuntu@10.0.0.12:2222
+development	developer@development:22
 ```
 
 別の設定ファイルを起点にすることもできます。
@@ -36,7 +36,11 @@ development
 $ ssh-hosts ./testdata/ssh_config
 ```
 
-`--fzf` を指定すると、抽出したホストをfuzzy finderで絞り込み、選択した1件だけを表示します。
+一覧は `Hostエイリアス<TAB>ユーザー名@HostName:ポート` 形式です。`User`、`HostName`、
+`Port` がない場合は、それぞれ現在のローカルユーザー、Hostエイリアス、`22` を使用します。
+IPv6アドレスは `root@[2001:db8::10]:22` のように表示します。
+
+`--fzf` を指定すると、接続先を含む一覧をfuzzy finderで絞り込み、選択したHostエイリアスだけを表示します。
 利用可能なツールを `fzf`、`sk`、`peco` の順で自動検出します。
 
 ```console
@@ -66,10 +70,13 @@ Include conf.d/*.conf
 
 - `*`、`?`、`[` を含むHostパターンと、`!` から始まる否定パターンを除外します。
 - 同じホスト名は最初の1回だけ、設定に現れた順で表示します。
+- `User`、`HostName`、`Port` はOpenSSHと同様に、最初に得られた値を採用します。
+- `HostName` の `%h` と `User` の対応トークン・環境変数を展開します。
 - `Host` / `Match` ブロック内を含むすべての `Include` を探索します。
 - Includeの複数パス、glob、`${VAR}`、`~`、OpenSSHの静的な `%` トークンを扱います。
 - ユーザー設定の相対Includeパスは、OpenSSHと同じく `~/.ssh` を基準にします。
 - globに一致するファイルがない場合は無視します。明示したファイルを読めない場合はエラーになります。
 - 接続先がなければ展開できない `%h` などのトークンはエラーになります。
 
-このツールは設定に記述された候補を列挙するため、`Match` 条件や接続時の適用可否は評価しません。
+このツールは静的な一覧を生成するため、`Match all` 以外の `Match` 条件や接続時の
+CanonicalizeHostnameは評価しません。特に `Match exec` の外部コマンドは実行しません。

@@ -48,9 +48,129 @@ Match all
 	if err != nil {
 		t.Fatalf("load() error = %v", err)
 	}
-	want := []string{
+	wantAliases := []string{
 		"first", "exact-two", "quoted host", "included-10", "nested",
 		"included-20", "conditional", "extra", "tilde", "token", "last",
+	}
+	if got := hostAliases(hosts); !reflect.DeepEqual(got, wantAliases) {
+		t.Fatalf("aliases = %#v, want %#v", got, wantAliases)
+	}
+	for _, host := range hosts {
+		if host.User != "alice" || host.HostName != host.Alias || host.Port != "22" {
+			t.Errorf("host = %#v, want default destination values", host)
+		}
+	}
+}
+
+func TestResolveConnectionOptions(t *testing.T) {
+	tempDir := t.TempDir()
+	sshDir := filepath.Join(tempDir, ".ssh")
+	configPath := filepath.Join(sshDir, "config")
+	writeTestFile(t, configPath, `
+Host production
+    User deploy
+    HostName prod.example.com
+    Port 2222
+Host production
+    HostName ignored.example.com
+Host staging
+    HostName 10.0.0.12
+Host ipv6
+    User root
+    HostName 2001:db8::10
+Host templated
+    HostName %h.internal
+Host included
+    Include destination.conf
+Host dynamic
+Match exec "false"
+    User ignored
+Match all
+    User fallback
+    Port 22
+`)
+	writeTestFile(t, filepath.Join(sshDir, "destination.conf"), "HostName included.example.com\nPort 2200\n")
+
+	ctx := expansionContext{homeDir: tempDir, username: "local-user"}
+	hosts, err := newHostLoader(ctx).load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+	want := []Host{
+		{Alias: "production", User: "deploy", HostName: "prod.example.com", Port: "2222"},
+		{Alias: "staging", User: "fallback", HostName: "10.0.0.12", Port: "22"},
+		{Alias: "ipv6", User: "root", HostName: "2001:db8::10", Port: "22"},
+		{Alias: "templated", User: "fallback", HostName: "templated.internal", Port: "22"},
+		{Alias: "included", User: "fallback", HostName: "included.example.com", Port: "2200"},
+		{Alias: "dynamic", User: "fallback", HostName: "dynamic", Port: "22"},
+	}
+	if !reflect.DeepEqual(hosts, want) {
+		t.Fatalf("hosts = %#v, want %#v", hosts, want)
+	}
+	if got := hosts[2].Destination(); got != "root@[2001:db8::10]:22" {
+		t.Fatalf("IPv6 destination = %q, want %q", got, "root@[2001:db8::10]:22")
+	}
+}
+
+func TestResolveWildcardOptionsAndUserExpansion(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("SSH_HOSTS_TEST_USER", "env-user")
+	configPath := filepath.Join(tempDir, ".ssh", "config")
+	writeTestFile(t, configPath, `
+Host app-one excluded token-user
+Host app-*
+    HostName %h.example.com
+Host * !excluded
+    Port 2200
+Host token-user
+    User ${SSH_HOSTS_TEST_USER}-%u-%p
+Host *
+    User local-default
+    Port 22
+`)
+
+	ctx := expansionContext{
+		homeDir:       tempDir,
+		username:      "local",
+		uid:           "501",
+		localHostname: "workstation.example.com",
+		localShort:    "workstation",
+	}
+	hosts, err := newHostLoader(ctx).load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+	want := []Host{
+		{Alias: "app-one", User: "local-default", HostName: "app-one.example.com", Port: "2200"},
+		{Alias: "excluded", User: "local-default", HostName: "excluded", Port: "22"},
+		{Alias: "token-user", User: "env-user-local-2200", HostName: "token-user", Port: "2200"},
+	}
+	if !reflect.DeepEqual(hosts, want) {
+		t.Fatalf("hosts = %#v, want %#v", hosts, want)
+	}
+}
+
+func TestConditionalIncludePreservesParentHostState(t *testing.T) {
+	tempDir := t.TempDir()
+	sshDir := filepath.Join(tempDir, ".ssh")
+	configPath := filepath.Join(sshDir, "config")
+	writeTestFile(t, configPath, `
+Host foo
+    Include child.conf
+    Port 2222
+`)
+	writeTestFile(t, filepath.Join(sshDir, "child.conf"), `
+Host bar
+    HostName must-not-apply.example
+`)
+
+	hosts, err := newHostLoader(expansionContext{homeDir: tempDir, username: "alice"}).load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+	want := []Host{
+		{Alias: "foo", User: "alice", HostName: "foo", Port: "2222"},
+		{Alias: "bar", User: "alice", HostName: "bar", Port: "22"},
 	}
 	if !reflect.DeepEqual(hosts, want) {
 		t.Fatalf("hosts = %#v, want %#v", hosts, want)
@@ -115,6 +235,16 @@ func TestLoadErrors(t *testing.T) {
 			config:      "Host \"broken\n",
 			wantMessage: "unterminated",
 		},
+		{
+			name:        "invalid port",
+			config:      "Host broken\nPort 70000\n",
+			wantMessage: "invalid port",
+		},
+		{
+			name:        "unsupported user token",
+			config:      "Host broken\nUser %r\n",
+			wantMessage: "unsupported token %r",
+		},
 	}
 
 	for _, test := range tests {
@@ -143,13 +273,21 @@ func TestUnmatchedIncludeGlobIsIgnored(t *testing.T) {
 	configPath := filepath.Join(tempDir, ".ssh", "config")
 	writeTestFile(t, configPath, "Include absent/*.conf\nHost available\n")
 
-	hosts, err := newHostLoader(expansionContext{homeDir: tempDir}).load(configPath)
+	hosts, err := newHostLoader(expansionContext{homeDir: tempDir, username: "alice"}).load(configPath)
 	if err != nil {
 		t.Fatalf("load() error = %v", err)
 	}
-	if want := []string{"available"}; !reflect.DeepEqual(hosts, want) {
+	if want := []Host{{Alias: "available", User: "alice", HostName: "available", Port: "22"}}; !reflect.DeepEqual(hosts, want) {
 		t.Fatalf("hosts = %#v, want %#v", hosts, want)
 	}
+}
+
+func hostAliases(hosts []Host) []string {
+	aliases := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		aliases = append(aliases, host.Alias)
+	}
+	return aliases
 }
 
 func TestIncludeDepthLimit(t *testing.T) {

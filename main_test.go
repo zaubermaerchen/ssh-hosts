@@ -10,20 +10,22 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/zaubermaerchen/ssh-hosts/internal/finder"
 )
 
 func TestRunUsesDefaultConfig(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
-	writeTestFile(t, filepath.Join(homeDir, ".ssh", "config"), "Host default-host\n")
+	writeTestFile(t, filepath.Join(homeDir, ".ssh", "config"), "Host default-host\nUser alice\nHostName destination.example\nPort 2222\n")
 
 	var stdout, stderr bytes.Buffer
 	code := run(nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
 	}
-	if stdout.String() != "default-host\n" {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), "default-host\n")
+	if stdout.String() != "default-host\talice@destination.example:2222\n" {
+		t.Fatalf("stdout = %q, want resolved destination", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -32,24 +34,24 @@ func TestRunUsesDefaultConfig(t *testing.T) {
 
 func TestRunWithExplicitConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
-	writeTestFile(t, configPath, "Host explicit-host\n")
+	writeTestFile(t, configPath, "Host explicit-host\nUser bob\nHostName 10.0.0.1\nPort 2200\n")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{configPath}, &stdout, &stderr)
-	if code != 0 || stdout.String() != "explicit-host\n" {
+	if code != 0 || stdout.String() != "explicit-host\tbob@10.0.0.1:2200\n" {
 		t.Fatalf("run() code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
 	}
 }
 
 func TestRunWithFZF(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
-	writeTestFile(t, configPath, "Host alpha wildcard-* beta\n")
+	writeTestFile(t, configPath, "Host alpha wildcard-* beta\nUser tester\nHostName %h.example\nPort 2200\n")
 
-	var receivedHosts []string
+	var receivedItems []finder.Item
 	var receivedFinder string
-	selector := func(hosts []string, finder string, stdout, stderr io.Writer) (int, error) {
-		receivedHosts = append([]string(nil), hosts...)
-		receivedFinder = finder
+	selector := func(items []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
+		receivedItems = append([]finder.Item(nil), items...)
+		receivedFinder = finderName
 		fmt.Fprintln(stdout, "beta")
 		return 0, nil
 	}
@@ -58,8 +60,12 @@ func TestRunWithFZF(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
 	}
-	if want := []string{"alpha", "beta"}; !reflect.DeepEqual(receivedHosts, want) {
-		t.Fatalf("selector hosts = %#v, want %#v", receivedHosts, want)
+	wantItems := []finder.Item{
+		{Value: "alpha", Display: "alpha\ttester@alpha.example:2200"},
+		{Value: "beta", Display: "beta\ttester@beta.example:2200"},
+	}
+	if !reflect.DeepEqual(receivedItems, wantItems) {
+		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
 	}
 	if receivedFinder != "auto" {
 		t.Fatalf("selector finder = %q, want auto", receivedFinder)
@@ -73,7 +79,7 @@ func TestRunWithFZFError(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha\n")
 	wantError := errors.New("fzf is not installed")
-	selector := func([]string, string, io.Writer, io.Writer) (int, error) {
+	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
 		return 1, wantError
 	}
 
@@ -87,7 +93,7 @@ func TestRunWithFZFError(t *testing.T) {
 func TestRunPreservesFZFCancelCode(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha\n")
-	selector := func([]string, string, io.Writer, io.Writer) (int, error) {
+	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
 		return 130, nil
 	}
 
@@ -102,8 +108,8 @@ func TestFinderOptionImpliesFZF(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha\n")
 	var receivedFinder string
-	selector := func(_ []string, finder string, stdout, stderr io.Writer) (int, error) {
-		receivedFinder = finder
+	selector := func(_ []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
+		receivedFinder = finderName
 		fmt.Fprintln(stdout, "alpha")
 		return 0, nil
 	}
@@ -117,7 +123,7 @@ func TestFinderOptionImpliesFZF(t *testing.T) {
 
 func TestInvalidFinder(t *testing.T) {
 	selectorCalled := false
-	selector := func([]string, string, io.Writer, io.Writer) (int, error) {
+	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
 		selectorCalled = true
 		return 0, nil
 	}
