@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+
+	"github.com/zaubermaerchen/ssh-hosts/internal/finder"
+	"github.com/zaubermaerchen/ssh-hosts/internal/sshconfig"
 )
 
 func main() {
@@ -14,7 +16,7 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	return runWithSelector(args, stdout, stderr, selectWithFZF)
+	return runWithSelector(args, stdout, stderr, finder.Select)
 }
 
 type hostSelector func(hosts []string, finder string, stdout, stderr io.Writer) (int, error)
@@ -41,34 +43,34 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		flags.Usage()
 		return 2
 	}
-	finder, err := normalizeFinder(*finderFlag)
+	finderName, err := finder.Normalize(*finderFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 		flags.Usage()
 		return 2
 	}
-	if *useFZF && finder == "" {
-		finder = "auto"
+	if *useFZF && finderName == "" {
+		finderName = "auto"
 	}
 
-	ctx, err := systemExpansionContext()
+	configLoader, err := sshconfig.NewLoader()
 	if err != nil {
 		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 		return 1
 	}
 
-	configPath := filepath.Join(ctx.homeDir, ".ssh", "config")
+	configPath := configLoader.DefaultConfigPath()
 	if flags.NArg() == 1 {
 		configPath = flags.Arg(0)
 	}
 
-	hosts, err := newHostLoader(ctx).load(configPath)
+	hosts, err := configLoader.ListHosts(configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 		return 1
 	}
-	if finder != "" {
-		code, err := selector(hosts, finder, stdout, stderr)
+	if finderName != "" {
+		code, err := selector(hosts, finderName, stdout, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 			return 1

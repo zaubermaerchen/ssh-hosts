@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -152,5 +153,15 @@ func TestRunUsageErrors(t *testing.T) {
 				t.Fatalf("stderr = %q, want finder option", stderr.String())
 			}
 		})
+	}
+}
+
+func writeTestFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
 }

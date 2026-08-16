@@ -1,4 +1,4 @@
-package main
+package finder
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 
 func TestSelectWithFZFWithoutHosts(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code, err := selectWithFZF(nil, "auto", &stdout, &stderr)
+	code, err := Select(nil, "auto", &stdout, &stderr)
 	if err != nil || code != 1 {
 		t.Fatalf("selectWithFZF() code = %d, error = %v", code, err)
 	}
@@ -22,7 +22,7 @@ func TestSelectWithFZFWithoutHosts(t *testing.T) {
 func TestSelectWithFZFMissingExecutable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code, err := selectWithFZF([]string{"alpha"}, "fzf", &stdout, &stderr)
+	code, err := Select([]string{"alpha"}, "fzf", &stdout, &stderr)
 	if err == nil || code != 1 {
 		t.Fatalf("selectWithFZF() code = %d, error = %v", code, err)
 	}
@@ -36,7 +36,7 @@ func TestNormalizeFinder(t *testing.T) {
 		"": "", "auto": "auto", "FZF": "fzf", "sk": "sk", "skim": "sk", "peco": "peco",
 	}
 	for input, want := range tests {
-		got, err := normalizeFinder(input)
+		got, err := Normalize(input)
 		if err != nil || got != want {
 			t.Errorf("normalizeFinder(%q) = %q, %v; want %q, nil", input, got, err, want)
 		}

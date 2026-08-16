@@ -1,4 +1,4 @@
-package main
+package finder
 
 import (
 	"errors"
@@ -24,7 +24,8 @@ var supportedFinders = []finderSpec{
 	},
 }
 
-func normalizeFinder(name string) (string, error) {
+// Normalize validates a finder name and converts aliases to executable names.
+func Normalize(name string) (string, error) {
 	switch strings.ToLower(name) {
 	case "":
 		return "", nil
@@ -62,7 +63,8 @@ func resolveFinderWith(name string, lookPath func(string) (string, error)) (find
 	return finderSpec{}, fmt.Errorf("unsupported fuzzy finder %q", name)
 }
 
-func selectWithFZF(hosts []string, finderName string, stdout, stderr io.Writer) (int, error) {
+// Select runs a fuzzy finder with hosts as input and writes its selection.
+func Select(hosts []string, finderName string, stdout, stderr io.Writer) (int, error) {
 	if len(hosts) == 0 {
 		return 1, nil
 	}

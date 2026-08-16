@@ -1,4 +1,4 @@
-package main
+package sshconfig
 
 import (
 	"bufio"
@@ -20,6 +20,31 @@ type expansionContext struct {
 	uid           string
 	localHostname string
 	localShort    string
+}
+
+// Loader reads OpenSSH client configuration using the current user's
+// environment for Include path and token expansion.
+type Loader struct {
+	ctx expansionContext
+}
+
+// NewLoader creates a Loader configured for the current user and machine.
+func NewLoader() (*Loader, error) {
+	ctx, err := systemExpansionContext()
+	if err != nil {
+		return nil, err
+	}
+	return &Loader{ctx: ctx}, nil
+}
+
+// DefaultConfigPath returns the current user's default SSH config path.
+func (l *Loader) DefaultConfigPath() string {
+	return filepath.Join(l.ctx.homeDir, ".ssh", "config")
+}
+
+// ListHosts returns concrete Host entries in first-seen order.
+func (l *Loader) ListHosts(configPath string) ([]string, error) {
+	return newHostLoader(l.ctx).load(configPath)
 }
 
 func systemExpansionContext() (expansionContext, error) {
