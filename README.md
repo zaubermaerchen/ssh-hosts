@@ -59,6 +59,27 @@ $ ssh-hosts --finder=peco
 
 EscまたはCtrl-Cで選択をキャンセルした場合は、finderの非0終了コードをそのまま返します。
 
+### JSON出力
+
+`--json` を指定すると、接続情報を整形済みのJSON配列で出力します。
+
+```console
+$ ssh-hosts --json
+[
+  {
+    "alias": "production",
+    "user": "deploy",
+    "hostname": "prod.example.com",
+    "port": 2222,
+    "destination": "deploy@prod.example.com:2222"
+  }
+]
+$ ssh-hosts --json | jq -r '.[] | select(.port != 22) | .alias'
+production
+```
+
+ホストがない場合は `[]` を出力します。`--json` は `--fzf` / `--finder` と併用できません。
+
 次のような設定では `production` と `staging` だけが表示されます。
 
 ```sshconfig

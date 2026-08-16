@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/zaubermaerchen/ssh-hosts/internal/finder"
+	"github.com/zaubermaerchen/ssh-hosts/internal/sshconfig"
 )
 
 func TestRunUsesDefaultConfig(t *testing.T) {
@@ -40,6 +42,57 @@ func TestRunWithExplicitConfig(t *testing.T) {
 	code := run([]string{configPath}, &stdout, &stderr)
 	if code != 0 || stdout.String() != "explicit-host\tbob@10.0.0.1:2200\n" {
 		t.Fatalf("run() code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunWithJSON(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "custom-config")
+	writeTestFile(t, configPath, `
+Host production
+    User deploy
+    HostName prod.example.com
+    Port 2222
+Host ipv6
+    User root
+    HostName 2001:db8::10
+`)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--json", configPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
+	}
+	var got []jsonHost
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("JSON output = %q: %v", stdout.String(), err)
+	}
+	want := []jsonHost{
+		{Alias: "production", User: "deploy", Hostname: "prod.example.com", Port: 2222, Destination: "deploy@prod.example.com:2222"},
+		{Alias: "ipv6", User: "root", Hostname: "2001:db8::10", Port: 22, Destination: "root@[2001:db8::10]:22"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("JSON hosts = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(stdout.String(), "\n  {") {
+		t.Fatalf("JSON output is not indented: %q", stdout.String())
+	}
+}
+
+func TestWriteJSONHostsWithNoHosts(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeJSONHosts(&output, nil); err != nil {
+		t.Fatalf("writeJSONHosts() error = %v", err)
+	}
+	if output.String() != "[]\n" {
+		t.Fatalf("output = %q, want []", output.String())
+	}
+}
+
+func TestWriteJSONHostsRejectsInvalidPort(t *testing.T) {
+	var output bytes.Buffer
+	err := writeJSONHosts(&output, []sshconfig.Host{{Alias: "broken", Port: "invalid"}})
+	if err == nil || !strings.Contains(err.Error(), "invalid port") {
+		t.Fatalf("writeJSONHosts() error = %v, want invalid port error", err)
 	}
 }
 
@@ -134,6 +187,21 @@ func TestInvalidFinder(t *testing.T) {
 	}
 }
 
+func TestJSONCannotBeCombinedWithFinder(t *testing.T) {
+	for _, args := range [][]string{{"--json", "--fzf"}, {"--json", "--finder=peco"}} {
+		selectorCalled := false
+		selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
+			selectorCalled = true
+			return 0, nil
+		}
+		var stdout, stderr bytes.Buffer
+		code := runWithSelector(args, &stdout, &stderr, selector)
+		if code != 2 || selectorCalled || !strings.Contains(stderr.String(), "cannot be combined") {
+			t.Fatalf("args = %#v, code = %d, selectorCalled = %v, stderr = %q", args, code, selectorCalled, stderr.String())
+		}
+	}
+}
+
 func TestRunUsageErrors(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -157,6 +225,9 @@ func TestRunUsageErrors(t *testing.T) {
 			}
 			if !strings.Contains(stderr.String(), "-finder") {
 				t.Fatalf("stderr = %q, want finder option", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "-json") {
+				t.Fatalf("stderr = %q, want json option", stderr.String())
 			}
 		})
 	}

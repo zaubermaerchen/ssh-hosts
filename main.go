@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/zaubermaerchen/ssh-hosts/internal/finder"
 	"github.com/zaubermaerchen/ssh-hosts/internal/sshconfig"
@@ -21,13 +23,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 type hostSelector func(items []finder.Item, finder string, stdout, stderr io.Writer) (int, error)
 
+type jsonHost struct {
+	Alias       string `json:"alias"`
+	User        string `json:"user"`
+	Hostname    string `json:"hostname"`
+	Port        int    `json:"port"`
+	Destination string `json:"destination"`
+}
+
 func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelector) int {
 	flags := flag.NewFlagSet("ssh-hosts", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	jsonOutput := flags.Bool("json", false, "output hosts as a JSON array")
 	useFZF := flags.Bool("fzf", false, "select one host with the first available fuzzy finder")
 	finderFlag := flags.String("finder", "", "fuzzy finder: auto, fzf, sk/skim, or peco (implies --fzf)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: ssh-hosts [--fzf | --finder=NAME] [config-file]")
+		fmt.Fprintln(stderr, "Usage: ssh-hosts [--json | --fzf | --finder=NAME] [config-file]")
 		fmt.Fprintln(stderr, "List SSH aliases and their resolved connection destinations.")
 		flags.PrintDefaults()
 	}
@@ -52,6 +63,11 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	if *useFZF && finderName == "" {
 		finderName = "auto"
 	}
+	if *jsonOutput && finderName != "" {
+		fmt.Fprintln(stderr, "ssh-hosts: --json cannot be combined with --fzf or --finder")
+		flags.Usage()
+		return 2
+	}
 
 	configLoader, err := sshconfig.NewLoader()
 	if err != nil {
@@ -68,6 +84,13 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	if err != nil {
 		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 		return 1
+	}
+	if *jsonOutput {
+		if err := writeJSONHosts(stdout, hosts); err != nil {
+			fmt.Fprintf(stderr, "ssh-hosts: encode JSON: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	items := make([]finder.Item, 0, len(hosts))
 	for _, host := range hosts {
@@ -88,4 +111,24 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		fmt.Fprintln(stdout, item.Display)
 	}
 	return 0
+}
+
+func writeJSONHosts(output io.Writer, hosts []sshconfig.Host) error {
+	jsonHosts := make([]jsonHost, 0, len(hosts))
+	for _, host := range hosts {
+		port, err := strconv.Atoi(host.Port)
+		if err != nil {
+			return fmt.Errorf("invalid port %q for host %q: %w", host.Port, host.Alias, err)
+		}
+		jsonHosts = append(jsonHosts, jsonHost{
+			Alias:       host.Alias,
+			User:        host.User,
+			Hostname:    host.HostName,
+			Port:        port,
+			Destination: host.Destination(),
+		})
+	}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(jsonHosts)
 }
