@@ -15,6 +15,10 @@ go install github.com/zaubermaerchen/ssh-hosts@latest
 go build .
 ```
 
+対話選択を使用する場合は、[`fzf`](https://github.com/junegunn/fzf)、
+[`skim`](https://github.com/skim-rs/skim)（実行名 `sk`）、
+または [`peco`](https://github.com/peco/peco) のいずれかがPATH上に必要です。
+
 ## 使い方
 
 引数を省略すると `~/.ssh/config` を読み込みます。
@@ -31,6 +35,25 @@ development
 ```console
 $ ssh-hosts ./testdata/ssh_config
 ```
+
+`--fzf` を指定すると、抽出したホストをfuzzy finderで絞り込み、選択した1件だけを表示します。
+利用可能なツールを `fzf`、`sk`、`peco` の順で自動検出します。
+
+```console
+$ ssh-hosts --fzf
+production
+$ ssh "$(ssh-hosts --fzf)"
+```
+
+使用するツールは `--finder` で明示できます。このオプションだけでも対話選択が有効になります。
+
+```console
+$ ssh-hosts --finder=fzf
+$ ssh-hosts --finder=sk       # --finder=skim も可
+$ ssh-hosts --finder=peco
+```
+
+EscまたはCtrl-Cで選択をキャンセルした場合は、finderの非0終了コードをそのまま返します。
 
 次のような設定では `production` と `staging` だけが表示されます。
 

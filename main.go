@@ -14,11 +14,20 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithSelector(args, stdout, stderr, selectWithFZF)
+}
+
+type hostSelector func(hosts []string, finder string, stdout, stderr io.Writer) (int, error)
+
+func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelector) int {
 	flags := flag.NewFlagSet("ssh-hosts", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	useFZF := flags.Bool("fzf", false, "select one host with the first available fuzzy finder")
+	finderFlag := flags.String("finder", "", "fuzzy finder: auto, fzf, sk/skim, or peco (implies --fzf)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: ssh-hosts [config-file]")
+		fmt.Fprintln(stderr, "Usage: ssh-hosts [--fzf | --finder=NAME] [config-file]")
 		fmt.Fprintln(stderr, "List concrete Host names from an OpenSSH client configuration.")
+		flags.PrintDefaults()
 	}
 
 	if err := flags.Parse(args); err != nil {
@@ -31,6 +40,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ssh-hosts: expected at most one config file")
 		flags.Usage()
 		return 2
+	}
+	finder, err := normalizeFinder(*finderFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
+		flags.Usage()
+		return 2
+	}
+	if *useFZF && finder == "" {
+		finder = "auto"
 	}
 
 	ctx, err := systemExpansionContext()
@@ -48,6 +66,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 		return 1
+	}
+	if finder != "" {
+		code, err := selector(hosts, finder, stdout, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
+			return 1
+		}
+		return code
 	}
 	for _, host := range hosts {
 		fmt.Fprintln(stdout, host)
