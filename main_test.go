@@ -26,8 +26,8 @@ func TestRunUsesDefaultConfig(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
 	}
-	if stdout.String() != "default-host\talice@destination.example:2222\n" {
-		t.Fatalf("stdout = %q, want resolved destination", stdout.String())
+	if stdout.String() != "default-host\n" {
+		t.Fatalf("stdout = %q, want alias-only output", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -40,8 +40,30 @@ func TestRunWithExplicitConfig(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{configPath}, &stdout, &stderr)
-	if code != 0 || stdout.String() != "explicit-host\tbob@10.0.0.1:2200\n" {
+	if code != 0 || stdout.String() != "explicit-host\n" {
 		t.Fatalf("run() code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunWithDetails(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "custom-config")
+	writeTestFile(t, configPath, `
+Host production
+    User deploy
+    HostName prod.example.com
+    Port 2222
+Host staging
+    User ubuntu
+    HostName 10.0.0.12
+`)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--details", configPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if want := "production\tdeploy@prod.example.com:2222\nstaging\tubuntu@10.0.0.12:22\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 
@@ -128,6 +150,38 @@ func TestRunWithFZF(t *testing.T) {
 	}
 }
 
+func TestRunWithFZFAndDetails(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "custom-config")
+	writeTestFile(t, configPath, "Host alpha beta\nUser tester\nHostName %h.example\nPort 2200\n")
+
+	var receivedItems []finder.Item
+	var receivedFinder string
+	selector := func(items []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
+		receivedItems = append([]finder.Item(nil), items...)
+		receivedFinder = finderName
+		fmt.Fprintln(stdout, items[1].Value)
+		return 0, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithSelector([]string{"--details", "--fzf", configPath}, &stdout, &stderr, selector)
+	if code != 0 {
+		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
+	}
+	wantItems := []finder.Item{
+		{Value: "alpha\ttester@alpha.example:2200", Display: "alpha\ttester@alpha.example:2200"},
+		{Value: "beta\ttester@beta.example:2200", Display: "beta\ttester@beta.example:2200"},
+	}
+	if !reflect.DeepEqual(receivedItems, wantItems) {
+		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
+	}
+	if receivedFinder != "auto" {
+		t.Fatalf("selector finder = %q, want auto", receivedFinder)
+	}
+	if stdout.String() != "beta\ttester@beta.example:2200\n" {
+		t.Fatalf("stdout = %q, want detailed selection", stdout.String())
+	}
+}
+
 func TestRunWithFZFError(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha\n")
@@ -174,6 +228,38 @@ func TestFinderOptionImpliesFZF(t *testing.T) {
 	}
 }
 
+func TestFinderOptionWithDetailsOutputsDetailedSelection(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "custom-config")
+	writeTestFile(t, configPath, "Host alpha beta\nUser tester\nHostName %h.example\nPort 2200\n")
+	var receivedItems []finder.Item
+	var receivedFinder string
+	selector := func(items []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
+		receivedItems = append([]finder.Item(nil), items...)
+		receivedFinder = finderName
+		fmt.Fprintln(stdout, items[1].Value)
+		return 0, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runWithSelector([]string{"--finder=peco", "--details", configPath}, &stdout, &stderr, selector)
+	if code != 0 {
+		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
+	}
+	wantItems := []finder.Item{
+		{Value: "alpha\ttester@alpha.example:2200", Display: "alpha\ttester@alpha.example:2200"},
+		{Value: "beta\ttester@beta.example:2200", Display: "beta\ttester@beta.example:2200"},
+	}
+	if !reflect.DeepEqual(receivedItems, wantItems) {
+		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
+	}
+	if receivedFinder != "peco" {
+		t.Fatalf("selector finder = %q, want peco", receivedFinder)
+	}
+	if stdout.String() != "beta\ttester@beta.example:2200\n" {
+		t.Fatalf("stdout = %q, want detailed selection", stdout.String())
+	}
+}
+
 func TestInvalidFinder(t *testing.T) {
 	selectorCalled := false
 	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
@@ -198,6 +284,38 @@ func TestJSONCannotBeCombinedWithFinder(t *testing.T) {
 		code := runWithSelector(args, &stdout, &stderr, selector)
 		if code != 2 || selectorCalled || !strings.Contains(stderr.String(), "cannot be combined") {
 			t.Fatalf("args = %#v, code = %d, selectorCalled = %v, stderr = %q", args, code, selectorCalled, stderr.String())
+		}
+	}
+}
+
+func TestDetailsCannotBeCombinedWithJSON(t *testing.T) {
+	for _, args := range [][]string{
+		{"--details", "--json"},
+		{"--json", "--details"},
+	} {
+		selectorCalled := false
+		selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
+			selectorCalled = true
+			return 0, nil
+		}
+		var stdout, stderr bytes.Buffer
+		code := runWithSelector(args, &stdout, &stderr, selector)
+		if code != 2 || selectorCalled || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--details cannot be combined with --json") {
+			t.Fatalf("args = %#v, code = %d, selectorCalled = %v, stderr = %q", args, code, selectorCalled, stderr.String())
+		}
+	}
+}
+
+func TestRunReportsOutputError(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "custom-config")
+	writeTestFile(t, configPath, "Host alpha\n")
+	wantError := errors.New("output unavailable")
+
+	for _, args := range [][]string{{configPath}, {"--details", configPath}} {
+		var stderr bytes.Buffer
+		code := run(args, errorWriter{err: wantError}, &stderr)
+		if code != 1 || !strings.Contains(stderr.String(), "write output") || !strings.Contains(stderr.String(), wantError.Error()) {
+			t.Fatalf("args = %#v, code = %d, stderr = %q", args, code, stderr.String())
 		}
 	}
 }
@@ -229,6 +347,9 @@ func TestRunUsageErrors(t *testing.T) {
 			if !strings.Contains(stderr.String(), "-json") {
 				t.Fatalf("stderr = %q, want json option", stderr.String())
 			}
+			if !strings.Contains(stderr.String(), "-details") {
+				t.Fatalf("stderr = %q, want details option", stderr.String())
+			}
 		})
 	}
 }
@@ -241,4 +362,12 @@ func writeTestFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
+}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }

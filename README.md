@@ -22,12 +22,13 @@ go build .
 ## 使い方
 
 引数を省略すると `~/.ssh/config` を読み込みます。
+使える出力・選択オプションは `--json`、`--details`、`--fzf`、`--finder=NAME` です。
 
 ```console
 $ ssh-hosts
-production	deploy@prod.example.com:22
-staging	ubuntu@10.0.0.12:2222
-development	developer@development:22
+production
+staging
+development
 ```
 
 別の設定ファイルを起点にすることもできます。
@@ -36,17 +37,34 @@ development	developer@development:22
 $ ssh-hosts ./testdata/ssh_config
 ```
 
-一覧は `Hostエイリアス<TAB>ユーザー名@HostName:ポート` 形式です。`User`、`HostName`、
+通常の一覧はHostエイリアスだけを1行ずつ表示します。接続先の詳細も表示する場合は
+`--details` を指定します。
+
+```console
+$ ssh-hosts --details
+production	deploy@prod.example.com:22
+staging	ubuntu@10.0.0.12:2222
+development	developer@development:22
+```
+
+詳細は `Hostエイリアス<TAB>ユーザー名@HostName:ポート` 形式です。`User`、`HostName`、
 `Port` がない場合は、それぞれ現在のローカルユーザー、Hostエイリアス、`22` を使用します。
 IPv6アドレスは `root@[2001:db8::10]:22` のように表示します。
 
-`--fzf` を指定すると、接続先を含む一覧をfuzzy finderで絞り込み、選択したHostエイリアスだけを表示します。
+`--fzf` を指定すると、接続先を含む一覧をfuzzy finderで絞り込み、選択したHostエイリアスを表示します。
 利用可能なツールを `fzf`、`sk`、`peco` の順で自動検出します。
 
 ```console
 $ ssh-hosts --fzf
 production
 $ ssh "$(ssh-hosts --fzf)"
+```
+
+`--details` と組み合わせると、選択後も `Hostエイリアス<TAB>ユーザー名@HostName:ポート` 形式で出力します。
+
+```console
+$ ssh-hosts --details --fzf
+production	deploy@prod.example.com:22
 ```
 
 使用するツールは `--finder` で明示できます。このオプションだけでも対話選択が有効になります。
@@ -78,7 +96,8 @@ $ ssh-hosts --json | jq -r '.[] | select(.port != 22) | .alias'
 production
 ```
 
-ホストがない場合は `[]` を出力します。`--json` は `--fzf` / `--finder` と併用できません。
+ホストがない場合は `[]` を出力します。`--json` は `--details`、`--fzf`、`--finder` と併用できません。
+`--details` は `--fzf` / `--finder` と組み合わせて、finderの候補表示と選択後の出力を詳細形式にできます。
 
 次のような設定では `production` と `staging` だけが表示されます。
 

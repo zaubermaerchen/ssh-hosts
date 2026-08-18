@@ -35,11 +35,13 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	flags := flag.NewFlagSet("ssh-hosts", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "output hosts as a JSON array")
+	detailsOutput := flags.Bool("details", false, "output hosts with resolved connection destinations")
 	useFZF := flags.Bool("fzf", false, "select one host with the first available fuzzy finder")
 	finderFlag := flags.String("finder", "", "fuzzy finder: auto, fzf, sk/skim, or peco (implies --fzf)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: ssh-hosts [--json | --fzf | --finder=NAME] [config-file]")
-		fmt.Fprintln(stderr, "List SSH aliases and their resolved connection destinations.")
+		fmt.Fprintln(stderr, "Usage: ssh-hosts [--details] [--fzf] [--finder=NAME] [config-file]")
+		fmt.Fprintln(stderr, "       ssh-hosts --json [config-file]")
+		fmt.Fprintln(stderr, "List SSH aliases, optionally with resolved connection destinations.")
 		flags.PrintDefaults()
 	}
 
@@ -65,6 +67,11 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	}
 	if *jsonOutput && finderName != "" {
 		fmt.Fprintln(stderr, "ssh-hosts: --json cannot be combined with --fzf or --finder")
+		flags.Usage()
+		return 2
+	}
+	if *detailsOutput && *jsonOutput {
+		fmt.Fprintln(stderr, "ssh-hosts: --details cannot be combined with --json")
 		flags.Usage()
 		return 2
 	}
@@ -94,9 +101,14 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	}
 	items := make([]finder.Item, 0, len(hosts))
 	for _, host := range hosts {
+		display := host.Alias + "\t" + host.Destination()
+		value := host.Alias
+		if *detailsOutput {
+			value = display
+		}
 		items = append(items, finder.Item{
-			Value:   host.Alias,
-			Display: host.Alias + "\t" + host.Destination(),
+			Value:   value,
+			Display: display,
 		})
 	}
 	if finderName != "" {
@@ -108,7 +120,14 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		return code
 	}
 	for _, item := range items {
-		fmt.Fprintln(stdout, item.Display)
+		value := item.Value
+		if *detailsOutput {
+			value = item.Display
+		}
+		if _, err := fmt.Fprintln(stdout, value); err != nil {
+			fmt.Fprintf(stderr, "ssh-hosts: write output: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }

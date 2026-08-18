@@ -107,8 +107,17 @@ func Select(items []Item, finderName string, stdout, stderr io.Writer) (int, err
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintln(stdout, value)
+	if err := writeSelectedValue(stdout, value); err != nil {
+		return 1, err
+	}
 	return 0, nil
+}
+
+func writeSelectedValue(output io.Writer, value string) error {
+	if _, err := fmt.Fprintln(output, value); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
 }
 
 func selectedValue(output string, items []Item) (string, error) {

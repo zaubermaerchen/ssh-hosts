@@ -69,6 +69,20 @@ func TestSelectedValue(t *testing.T) {
 	if _, err := selectedValue("unknown\n", items); err == nil {
 		t.Fatal("selectedValue() error = nil, want unknown selection error")
 	}
+
+	details := "production\tdeploy@prod.example.com:22"
+	got, err = selectedValue(details+"\n", []Item{{Value: details, Display: details}})
+	if err != nil || got != details {
+		t.Fatalf("selectedValue() = %q, %v; want %q, nil", got, err, details)
+	}
+}
+
+func TestWriteSelectedValueReportsOutputError(t *testing.T) {
+	wantError := errors.New("output unavailable")
+	err := writeSelectedValue(errorWriter{err: wantError}, "production")
+	if !errors.Is(err, wantError) || !strings.Contains(err.Error(), "write output") {
+		t.Fatalf("writeSelectedValue() error = %v, want wrapped output error", err)
+	}
 }
 
 func TestResolveFinderAutomaticallyFallsBack(t *testing.T) {
@@ -91,4 +105,12 @@ func TestResolveFinderAutomaticallyFallsBack(t *testing.T) {
 	if want := []string{"fzf", "sk"}; !reflect.DeepEqual(checked, want) {
 		t.Fatalf("checked = %#v, want %#v", checked, want)
 	}
+}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }
