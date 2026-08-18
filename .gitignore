@@ -3,6 +3,7 @@
 #
 # Binaries for programs and plugins
 /ssh-hosts
+/dist/
 *.exe
 *.exe~
 *.dll
