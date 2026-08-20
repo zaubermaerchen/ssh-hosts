@@ -5,6 +5,8 @@ OpenSSHのクライアント設定から、具体的なホストと接続先を�
 
 ## インストール
 
+ソースからインストールまたはビルドする場合は、Go 1.24以降が必要です。
+
 ```console
 go install github.com/zaubermaerchen/ssh-hosts@latest
 ```
@@ -15,14 +17,12 @@ go install github.com/zaubermaerchen/ssh-hosts@latest
 go build .
 ```
 
-対話選択を使用する場合は、[`fzf`](https://github.com/junegunn/fzf)、
-[`skim`](https://github.com/skim-rs/skim)（実行名 `sk`）、
-または [`peco`](https://github.com/peco/peco) のいずれかがPATH上に必要です。
+対話選択機能はバイナリに組み込まれているため、外部のfuzzy finderは不要です。
 
 ## 使い方
 
 引数を省略すると `~/.ssh/config` を読み込みます。
-使える出力・選択オプションは `--json`、`--details`、`--fzf`、`--finder=NAME` です。
+使える出力・選択オプションは `--json`、`--details`、`--select` です。
 
 ```console
 $ ssh-hosts
@@ -51,31 +51,40 @@ development	developer@development:22
 `Port` がない場合は、それぞれ現在のローカルユーザー、Hostエイリアス、`22` を使用します。
 IPv6アドレスは `root@[2001:db8::10]:22` のように表示します。
 
-`--fzf` を指定すると、接続先を含む一覧をfuzzy finderで絞り込み、選択したHostエイリアスを表示します。
-利用可能なツールを `fzf`、`sk`、`peco` の順で自動検出します。
+### 対話選択
+
+`--select` を指定すると、接続先を含む一覧を組み込みのfuzzy finderで絞り込み、
+選択したHostエイリアスを表示します。
 
 ```console
-$ ssh-hosts --fzf
+$ ssh-hosts --select
 production
-$ ssh "$(ssh-hosts --fzf)"
+```
+
+OpenSSHと組み合わせる事で選択したHostエイリアスにそのまま接続する事が可能です。
+
+```console
+$ ssh "$(ssh-hosts --select)"
+```
+
+次の関数を `~/.zshrc` または `~/.bashrc` に追加すると、
+`sshh` だけで接続先を選択してSSH接続できます。
+
+```sh
+sshh() {
+  local host
+  host="$(ssh-hosts --select)" || return $?
+  [ -n "$host" ] || return 1
+  command ssh "$host"
+}
 ```
 
 `--details` と組み合わせると、選択後も `Hostエイリアス<TAB>ユーザー名@HostName:ポート` 形式で出力します。
 
 ```console
-$ ssh-hosts --details --fzf
+$ ssh-hosts --details --select
 production	deploy@prod.example.com:22
 ```
-
-使用するツールは `--finder` で明示できます。このオプションだけでも対話選択が有効になります。
-
-```console
-$ ssh-hosts --finder=fzf
-$ ssh-hosts --finder=sk       # --finder=skim も可
-$ ssh-hosts --finder=peco
-```
-
-EscまたはCtrl-Cで選択をキャンセルした場合は、finderの非0終了コードをそのまま返します。
 
 ### JSON出力
 
@@ -96,8 +105,8 @@ $ ssh-hosts --json | jq -r '.[] | select(.port != 22) | .alias'
 production
 ```
 
-ホストがない場合は `[]` を出力します。`--json` は `--details`、`--fzf`、`--finder` と併用できません。
-`--details` は `--fzf` / `--finder` と組み合わせて、finderの候補表示と選択後の出力を詳細形式にできます。
+ホストがない場合は `[]` を出力します。`--json` は `--details`、`--select` と併用できません。
+`--details` は `--select` と組み合わせて、候補表示と選択後の出力を詳細形式にできます。
 
 次のような設定では `production` と `staging` だけが表示されます。
 
