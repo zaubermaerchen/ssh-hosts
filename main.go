@@ -21,7 +21,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runWithSelector(args, stdout, stderr, finder.Select)
 }
 
-type hostSelector func(items []finder.Item, finder string, stdout, stderr io.Writer) (int, error)
+type hostSelector func(items []finder.Item, stdout, stderr io.Writer) (int, error)
 
 type jsonHost struct {
 	Alias       string `json:"alias"`
@@ -36,10 +36,9 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "output hosts as a JSON array")
 	detailsOutput := flags.Bool("details", false, "output hosts with resolved connection destinations")
-	useFZF := flags.Bool("fzf", false, "select one host with the first available fuzzy finder")
-	finderFlag := flags.String("finder", "", "fuzzy finder: auto, fzf, sk/skim, or peco (implies --fzf)")
+	selectOutput := flags.Bool("select", false, "select one host interactively")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: ssh-hosts [--details] [--fzf] [--finder=NAME] [config-file]")
+		fmt.Fprintln(stderr, "Usage: ssh-hosts [--details] [--select] [config-file]")
 		fmt.Fprintln(stderr, "       ssh-hosts --json [config-file]")
 		fmt.Fprintln(stderr, "List SSH aliases, optionally with resolved connection destinations.")
 		flags.PrintDefaults()
@@ -56,17 +55,8 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		flags.Usage()
 		return 2
 	}
-	finderName, err := finder.Normalize(*finderFlag)
-	if err != nil {
-		fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
-		flags.Usage()
-		return 2
-	}
-	if *useFZF && finderName == "" {
-		finderName = "auto"
-	}
-	if *jsonOutput && finderName != "" {
-		fmt.Fprintln(stderr, "ssh-hosts: --json cannot be combined with --fzf or --finder")
+	if *jsonOutput && *selectOutput {
+		fmt.Fprintln(stderr, "ssh-hosts: --json cannot be combined with --select")
 		flags.Usage()
 		return 2
 	}
@@ -111,8 +101,8 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 			Display: display,
 		})
 	}
-	if finderName != "" {
-		code, err := selector(items, finderName, stdout, stderr)
+	if *selectOutput {
+		code, err := selector(items, stdout, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "ssh-hosts: %v\n", err)
 			return 1

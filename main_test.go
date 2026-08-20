@@ -118,20 +118,18 @@ func TestWriteJSONHostsRejectsInvalidPort(t *testing.T) {
 	}
 }
 
-func TestRunWithFZF(t *testing.T) {
+func TestRunWithSelect(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha wildcard-* beta\nUser tester\nHostName %h.example\nPort 2200\n")
 
 	var receivedItems []finder.Item
-	var receivedFinder string
-	selector := func(items []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
+	selector := func(items []finder.Item, stdout, stderr io.Writer) (int, error) {
 		receivedItems = append([]finder.Item(nil), items...)
-		receivedFinder = finderName
 		fmt.Fprintln(stdout, "beta")
 		return 0, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--fzf", configPath}, &stdout, &stderr, selector)
+	code := runWithSelector([]string{"--select", configPath}, &stdout, &stderr, selector)
 	if code != 0 {
 		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
 	}
@@ -142,28 +140,23 @@ func TestRunWithFZF(t *testing.T) {
 	if !reflect.DeepEqual(receivedItems, wantItems) {
 		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
 	}
-	if receivedFinder != "auto" {
-		t.Fatalf("selector finder = %q, want auto", receivedFinder)
-	}
 	if stdout.String() != "beta\n" {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), "beta\n")
 	}
 }
 
-func TestRunWithFZFAndDetails(t *testing.T) {
+func TestRunWithSelectAndDetails(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha beta\nUser tester\nHostName %h.example\nPort 2200\n")
 
 	var receivedItems []finder.Item
-	var receivedFinder string
-	selector := func(items []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
+	selector := func(items []finder.Item, stdout, stderr io.Writer) (int, error) {
 		receivedItems = append([]finder.Item(nil), items...)
-		receivedFinder = finderName
 		fmt.Fprintln(stdout, items[1].Value)
 		return 0, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--details", "--fzf", configPath}, &stdout, &stderr, selector)
+	code := runWithSelector([]string{"--details", "--select", configPath}, &stdout, &stderr, selector)
 	if code != 0 {
 		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
 	}
@@ -174,115 +167,66 @@ func TestRunWithFZFAndDetails(t *testing.T) {
 	if !reflect.DeepEqual(receivedItems, wantItems) {
 		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
 	}
-	if receivedFinder != "auto" {
-		t.Fatalf("selector finder = %q, want auto", receivedFinder)
-	}
 	if stdout.String() != "beta\ttester@beta.example:2200\n" {
 		t.Fatalf("stdout = %q, want detailed selection", stdout.String())
 	}
 }
 
-func TestRunWithFZFError(t *testing.T) {
+func TestRunWithSelectError(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha\n")
-	wantError := errors.New("fzf is not installed")
-	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
+	wantError := errors.New("terminal unavailable")
+	selector := func([]finder.Item, io.Writer, io.Writer) (int, error) {
 		return 1, wantError
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--fzf", configPath}, &stdout, &stderr, selector)
+	code := runWithSelector([]string{"--select", configPath}, &stdout, &stderr, selector)
 	if code != 1 || !strings.Contains(stderr.String(), wantError.Error()) {
 		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
 	}
 }
 
-func TestRunPreservesFZFCancelCode(t *testing.T) {
+func TestRunWithSelectCancellationHasNoError(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "custom-config")
 	writeTestFile(t, configPath, "Host alpha\n")
-	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
-		return 130, nil
+	selector := func([]finder.Item, io.Writer, io.Writer) (int, error) {
+		return 1, nil
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--fzf", configPath}, &stdout, &stderr, selector)
-	if code != 130 || stdout.Len() != 0 || stderr.Len() != 0 {
+	code := runWithSelector([]string{"--select", configPath}, &stdout, &stderr, selector)
+	if code == 0 || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("runWithSelector() code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
 	}
 }
 
-func TestFinderOptionImpliesFZF(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "custom-config")
-	writeTestFile(t, configPath, "Host alpha\n")
-	var receivedFinder string
-	selector := func(_ []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
-		receivedFinder = finderName
-		fmt.Fprintln(stdout, "alpha")
-		return 0, nil
-	}
-
-	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--finder=skim", configPath}, &stdout, &stderr, selector)
-	if code != 0 || receivedFinder != "sk" || stdout.String() != "alpha\n" {
-		t.Fatalf("code = %d, finder = %q, stdout = %q, stderr = %q", code, receivedFinder, stdout.String(), stderr.String())
-	}
-}
-
-func TestFinderOptionWithDetailsOutputsDetailedSelection(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "custom-config")
-	writeTestFile(t, configPath, "Host alpha beta\nUser tester\nHostName %h.example\nPort 2200\n")
-	var receivedItems []finder.Item
-	var receivedFinder string
-	selector := func(items []finder.Item, finderName string, stdout, stderr io.Writer) (int, error) {
-		receivedItems = append([]finder.Item(nil), items...)
-		receivedFinder = finderName
-		fmt.Fprintln(stdout, items[1].Value)
-		return 0, nil
-	}
-
-	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--finder=peco", "--details", configPath}, &stdout, &stderr, selector)
-	if code != 0 {
-		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
-	}
-	wantItems := []finder.Item{
-		{Value: "alpha\ttester@alpha.example:2200", Display: "alpha\ttester@alpha.example:2200"},
-		{Value: "beta\ttester@beta.example:2200", Display: "beta\ttester@beta.example:2200"},
-	}
-	if !reflect.DeepEqual(receivedItems, wantItems) {
-		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
-	}
-	if receivedFinder != "peco" {
-		t.Fatalf("selector finder = %q, want peco", receivedFinder)
-	}
-	if stdout.String() != "beta\ttester@beta.example:2200\n" {
-		t.Fatalf("stdout = %q, want detailed selection", stdout.String())
-	}
-}
-
-func TestInvalidFinder(t *testing.T) {
-	selectorCalled := false
-	selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
-		selectorCalled = true
-		return 0, nil
-	}
-	var stdout, stderr bytes.Buffer
-	code := runWithSelector([]string{"--finder=unknown"}, &stdout, &stderr, selector)
-	if code != 2 || selectorCalled || !strings.Contains(stderr.String(), "unsupported fuzzy finder") {
-		t.Fatalf("code = %d, selectorCalled = %v, stderr = %q", code, selectorCalled, stderr.String())
-	}
-}
-
-func TestJSONCannotBeCombinedWithFinder(t *testing.T) {
-	for _, args := range [][]string{{"--json", "--fzf"}, {"--json", "--finder=peco"}} {
+func TestRemovedFinderOptionsAreRejected(t *testing.T) {
+	for _, args := range [][]string{{"--fzf"}, {"--finder=fzf"}} {
 		selectorCalled := false
-		selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
+		selector := func([]finder.Item, io.Writer, io.Writer) (int, error) {
+			selectorCalled = true
+			return 0, nil
+		}
+
+		var stdout, stderr bytes.Buffer
+		code := runWithSelector(args, &stdout, &stderr, selector)
+		if code != 2 || selectorCalled || stdout.Len() != 0 || !strings.Contains(stderr.String(), "flag provided but not defined") {
+			t.Fatalf("args = %#v, code = %d, selectorCalled = %v, stdout = %q, stderr = %q", args, code, selectorCalled, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestJSONCannotBeCombinedWithSelect(t *testing.T) {
+	for _, args := range [][]string{{"--json", "--select"}, {"--select", "--json"}} {
+		selectorCalled := false
+		selector := func([]finder.Item, io.Writer, io.Writer) (int, error) {
 			selectorCalled = true
 			return 0, nil
 		}
 		var stdout, stderr bytes.Buffer
 		code := runWithSelector(args, &stdout, &stderr, selector)
-		if code != 2 || selectorCalled || !strings.Contains(stderr.String(), "cannot be combined") {
+		if code != 2 || selectorCalled || !strings.Contains(stderr.String(), "--json cannot be combined with --select") {
 			t.Fatalf("args = %#v, code = %d, selectorCalled = %v, stderr = %q", args, code, selectorCalled, stderr.String())
 		}
 	}
@@ -294,7 +238,7 @@ func TestDetailsCannotBeCombinedWithJSON(t *testing.T) {
 		{"--json", "--details"},
 	} {
 		selectorCalled := false
-		selector := func([]finder.Item, string, io.Writer, io.Writer) (int, error) {
+		selector := func([]finder.Item, io.Writer, io.Writer) (int, error) {
 			selectorCalled = true
 			return 0, nil
 		}
@@ -338,11 +282,8 @@ func TestRunUsageErrors(t *testing.T) {
 			if !strings.Contains(stderr.String(), "Usage: ssh-hosts") {
 				t.Fatalf("stderr = %q, want usage", stderr.String())
 			}
-			if !strings.Contains(stderr.String(), "-fzf") {
-				t.Fatalf("stderr = %q, want fzf option", stderr.String())
-			}
-			if !strings.Contains(stderr.String(), "-finder") {
-				t.Fatalf("stderr = %q, want finder option", stderr.String())
+			if !strings.Contains(stderr.String(), "-select") {
+				t.Fatalf("stderr = %q, want select option", stderr.String())
 			}
 			if !strings.Contains(stderr.String(), "-json") {
 				t.Fatalf("stderr = %q, want json option", stderr.String())
