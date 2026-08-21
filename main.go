@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 	"github.com/zaubermaerchen/ssh-hosts/internal/finder"
 	"github.com/zaubermaerchen/ssh-hosts/internal/sshconfig"
 )
@@ -141,11 +141,7 @@ func formatFinderDisplay(host sshconfig.Host, maxAliasWidth int) string {
 }
 
 func finderDisplayWidth(value string) int {
-	width := 0
-	for _, r := range value {
-		width += runewidth.RuneWidth(r)
-	}
-	return width
+	return uniseg.StringWidth(value)
 }
 
 func writeJSONHosts(output io.Writer, hosts []sshconfig.Host) error {
