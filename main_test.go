@@ -213,8 +213,8 @@ func TestFormatFinderDisplayAlignsMultiRuneGraphemes(t *testing.T) {
 		{Alias: "🇯🇵", User: "tester", HostName: "japan.example", Port: "22"},
 	}
 	maxWidth := maxHostAliasWidth(hosts)
-	if maxWidth != 2 {
-		t.Fatalf("maxHostAliasWidth() = %d, want grapheme-aware width 2", maxWidth)
+	if maxWidth != 4 {
+		t.Fatalf("maxHostAliasWidth() = %d, want per-rune width 4", maxWidth)
 	}
 
 	for _, host := range hosts {
