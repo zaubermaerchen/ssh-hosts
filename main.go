@@ -140,6 +140,8 @@ func formatFinderDisplay(host sshconfig.Host, maxAliasWidth int) string {
 	return host.Alias + strings.Repeat(" ", padding) + host.Destination()
 }
 
+// finderDisplayWidth mirrors go-fuzzyfinder v0.9.0, which advances candidate
+// positions by summing RuneWidth for each rune rather than each grapheme.
 func finderDisplayWidth(value string) int {
 	width := 0
 	for _, r := range value {
