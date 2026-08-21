@@ -134,8 +134,8 @@ func TestRunWithSelect(t *testing.T) {
 		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
 	}
 	wantItems := []finder.Item{
-		{Value: "alpha", Display: "alpha\ttester@alpha.example:2200"},
-		{Value: "beta", Display: "beta\ttester@beta.example:2200"},
+		{Value: "alpha", Display: "alpha  tester@alpha.example:2200"},
+		{Value: "beta", Display: "beta   tester@beta.example:2200"},
 	}
 	if !reflect.DeepEqual(receivedItems, wantItems) {
 		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
@@ -161,14 +161,71 @@ func TestRunWithSelectAndDetails(t *testing.T) {
 		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
 	}
 	wantItems := []finder.Item{
-		{Value: "alpha\ttester@alpha.example:2200", Display: "alpha\ttester@alpha.example:2200"},
-		{Value: "beta\ttester@beta.example:2200", Display: "beta\ttester@beta.example:2200"},
+		{Value: "alpha\ttester@alpha.example:2200", Display: "alpha  tester@alpha.example:2200"},
+		{Value: "beta\ttester@beta.example:2200", Display: "beta   tester@beta.example:2200"},
 	}
 	if !reflect.DeepEqual(receivedItems, wantItems) {
 		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
 	}
 	if stdout.String() != "beta\ttester@beta.example:2200\n" {
 		t.Fatalf("stdout = %q, want detailed selection", stdout.String())
+	}
+}
+
+func TestRunWithSelectAlignsAliasDisplays(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "custom-config")
+	writeTestFile(t, configPath, "Host a 東京\nUser tester\nHostName %h.example\n")
+
+	var receivedItems []finder.Item
+	selector := func(items []finder.Item, stdout, stderr io.Writer) (int, error) {
+		receivedItems = append([]finder.Item(nil), items...)
+		fmt.Fprintln(stdout, items[0].Value)
+		return 0, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithSelector([]string{"--select", configPath}, &stdout, &stderr, selector)
+	if code != 0 {
+		t.Fatalf("runWithSelector() code = %d, stderr = %q", code, stderr.String())
+	}
+	wantItems := []finder.Item{
+		{Value: "a", Display: "a     tester@a.example:22"},
+		{Value: "東京", Display: "東京  tester@東京.example:22"},
+	}
+	if !reflect.DeepEqual(receivedItems, wantItems) {
+		t.Fatalf("selector items = %#v, want %#v", receivedItems, wantItems)
+	}
+	if stdout.String() != "a\n" {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), "a\n")
+	}
+}
+
+func TestFormatFinderDisplayUsesMinimumSpacing(t *testing.T) {
+	host := sshconfig.Host{Alias: "long", User: "tester", HostName: "example.com", Port: "22"}
+	if got := formatFinderDisplay(host, finderDisplayWidth(host.Alias)); got != "long  tester@example.com:22" {
+		t.Fatalf("formatFinderDisplay() = %q, want minimum two spaces", got)
+	}
+}
+
+func TestFormatFinderDisplayAlignsMultiRuneGraphemes(t *testing.T) {
+	hosts := []sshconfig.Host{
+		{Alias: "x", User: "tester", HostName: "x.example", Port: "22"},
+		{Alias: "👩‍💻", User: "tester", HostName: "developer.example", Port: "22"},
+		{Alias: "🇯🇵", User: "tester", HostName: "japan.example", Port: "22"},
+	}
+	maxWidth := maxHostAliasWidth(hosts)
+	if maxWidth != 4 {
+		t.Fatalf("maxHostAliasWidth() = %d, want per-rune width 4", maxWidth)
+	}
+
+	for _, host := range hosts {
+		display := formatFinderDisplay(host, maxWidth)
+		destinationStart := strings.Index(display, host.Destination())
+		if destinationStart < 0 {
+			t.Fatalf("display = %q, missing destination %q", display, host.Destination())
+		}
+		if got := finderDisplayWidth(display[:destinationStart]); got != maxWidth+2 {
+			t.Errorf("alias %q destination column width = %d, want %d (display %q)", host.Alias, got, maxWidth+2, display)
+		}
 	}
 }
 
