@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/zaubermaerchen/ssh-hosts/internal/finder"
 	"github.com/zaubermaerchen/ssh-hosts/internal/sshconfig"
 )
@@ -89,12 +91,14 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		}
 		return 0
 	}
+	maxAliasWidth := maxHostAliasWidth(hosts)
 	items := make([]finder.Item, 0, len(hosts))
 	for _, host := range hosts {
-		display := host.Alias + "\t" + host.Destination()
+		details := host.Alias + "\t" + host.Destination()
+		display := formatFinderDisplay(host, maxAliasWidth)
 		value := host.Alias
 		if *detailsOutput {
-			value = display
+			value = details
 		}
 		items = append(items, finder.Item{
 			Value:   value,
@@ -110,16 +114,38 @@ func runWithSelector(args []string, stdout, stderr io.Writer, selector hostSelec
 		return code
 	}
 	for _, item := range items {
-		value := item.Value
-		if *detailsOutput {
-			value = item.Display
-		}
-		if _, err := fmt.Fprintln(stdout, value); err != nil {
+		if _, err := fmt.Fprintln(stdout, item.Value); err != nil {
 			fmt.Fprintf(stderr, "ssh-hosts: write output: %v\n", err)
 			return 1
 		}
 	}
 	return 0
+}
+
+func maxHostAliasWidth(hosts []sshconfig.Host) int {
+	maxWidth := 0
+	for _, host := range hosts {
+		if width := finderDisplayWidth(host.Alias); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	return maxWidth
+}
+
+func formatFinderDisplay(host sshconfig.Host, maxAliasWidth int) string {
+	padding := maxAliasWidth - finderDisplayWidth(host.Alias) + 2
+	if padding < 2 {
+		padding = 2
+	}
+	return host.Alias + strings.Repeat(" ", padding) + host.Destination()
+}
+
+func finderDisplayWidth(value string) int {
+	width := 0
+	for _, r := range value {
+		width += runewidth.RuneWidth(r)
+	}
+	return width
 }
 
 func writeJSONHosts(output io.Writer, hosts []sshconfig.Host) error {
